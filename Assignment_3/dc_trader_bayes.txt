@@ -1,0 +1,309 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using cAlgo.API;
+using cAlgo.API.Collections;
+using cAlgo.API.Indicators;
+using cAlgo.API.Internals;
+using System.IO;
+using System.Globalization;
+
+namespace cAlgo.Robots
+{
+    [Robot(AccessRights = AccessRights.None)] //None  FullAccess
+    public class dc_trader : Robot
+    {
+        //[Parameter(DefaultValue = "Hello world!")]
+        //public string Message { get; set; }
+        
+        
+        [Parameter("Threshold_up", DefaultValue = 0.001)]
+        public double Threshold_up { get; set; }
+        public double Threshold_down;
+        
+        [Parameter("p_win", DefaultValue = 0.5)]
+        public double p_win { get; set; }
+        
+        //[Parameter("Threshold_short_close", DefaultValue = 0.001)]
+        //public double Threshold_short_close { get; set; }
+        
+        [Parameter("Rol_win", DefaultValue = 250)]
+        public double Rol_win { get; set; }
+        
+        [Parameter("Threshold_up_big", DefaultValue = 0.005)]
+        public double Threshold_up_big { get; set; }
+        public int direction_big = 0;
+        public double Threshold_down_big;
+        
+        //[Parameter("Threshold_down", DefaultValue = 0.0004)]
+        public double cummaxPrice_big = 0;
+        public double maxdiff_big;
+        
+        public double cumminPrice_big = 10000000;
+        public double mindiff_big;
+        
+  
+        
+        
+        Queue<double> qt_short = new Queue<double>(); // Lets have a que of the last trades 
+        public double a = 1.0; // prior belif of beta distribution
+        public double b = 1.0; // prior belif of beta distribution
+        public double w_short = 0.0; // number of wins
+        public double n_short = 0.0; // number of obs
+        public double ex_short = 0.0; // expected value
+        
+        public int direction = 0;
+        public int shadow_short = 0;  // if a position is not in the market
+        public double shadow_short_sell = 0;  // the sell price used
+       
+        
+        Queue<double> qt_long = new Queue<double>(); // Lets have a que of the last trades 
+        public double w_long = 0.0; // number of wins
+        public double n_long = 0.0; // number of obs
+        public double ex_long = 0.0; // expected value
+        public int shadow_long = 0;  // if a position is not in the market
+        public double shadow_long_buy = 0;  // the sell price used
+        
+        public double win_loss = 0;  // does it work to set the algo in shadow?
+
+        public double price;  // current price
+        public double old_price;  // the price at the start of an event
+        public double diff;  // the current difference
+        
+        public double cummaxPrice = 0;
+        public double maxdiff;
+        
+        public double cumminPrice = 10000000;
+        public double mindiff;
+
+
+        protected override void OnStart()
+        {
+
+            Print("I am starting!");
+            Threshold_down = Threshold_up;
+            
+            
+            if(Threshold_up_big < Threshold_up){
+                Threshold_up_big = Threshold_up;
+                Print("Threshold_up_big = {0}", Threshold_up_big);
+            }
+            Threshold_down_big = Threshold_up_big;
+            
+            //System.Diagnostics.Debugger.Launch();
+            old_price = (Symbol.Ask + Symbol.Bid) / 2;
+        }
+
+        protected override void OnTick(){
+        
+            price = (Symbol.Ask + Symbol.Bid) / 2;
+            
+            // First find the "big trend":
+            if (direction_big == 0){ // Initialize the algo  
+                if(cummaxPrice_big < price){
+                    cummaxPrice_big = price; // The OSV is the max price for upward
+                }
+                else{
+                    maxdiff_big = (price - cummaxPrice_big)/cummaxPrice_big;
+                    if(maxdiff_big <= -1*Threshold_down_big){  // We reverse the trend
+                        direction_big = -1;
+                        cummaxPrice_big = 0;  // Set new low max-price
+                        cumminPrice_big = price;
+                    }
+                }
+            }
+            else if(direction_big == 1){  // If we are in upward trend
+                if(cummaxPrice_big < price){
+                    cummaxPrice_big = price; // The OSV is the max price for upward
+                }
+                else{
+                    maxdiff_big = (price - cummaxPrice_big)/cummaxPrice_big;
+                    if(maxdiff_big <= -1*Threshold_down_big){  // We reverse the trend
+                        direction_big = -1;
+                        cummaxPrice_big = 0;  // set new low max-price
+                        cumminPrice_big = price;
+                    }
+                }
+            }
+            else if(direction_big == -1){  // If we are in downward trend
+                if(cumminPrice_big > price){
+                    cumminPrice_big = price; // The OSV is the max price for upward
+                }
+                else{
+                    mindiff_big = (price - cumminPrice_big)/cumminPrice_big;
+                    if(mindiff_big >= Threshold_up_big){  // We reverse the trend
+                        direction_big = 1;
+                        cumminPrice_big = 10000000;  // set new low max-price
+                        cummaxPrice_big = price;
+                    }
+                }
+            }
+            
+            if (qt_short.Count > Rol_win){
+                 w_short -= qt_short.Dequeue();
+            }
+            n_short = qt_short.Count;
+            ex_short = (w_short + a) / (n_short + a + b);
+            
+            
+            if (qt_long.Count > Rol_win){
+                 w_long -= qt_long.Dequeue();
+            }
+            n_long = qt_long.Count;
+            ex_long = (w_long + a) / (n_long + a + b);
+            
+            
+            
+            
+            // The algo is initialized with the trend going up
+            if (direction == 0){ // Initialize the algo  
+                if(cummaxPrice < price){
+                    cummaxPrice = price; // The OSV is the max price for upward
+                }
+                else{
+                    maxdiff = (price - cummaxPrice)/cummaxPrice;
+                    if(maxdiff <= -1*Threshold_down){  // We reverse the trend
+                        direction = -1;
+                        cummaxPrice = 0;  // Set new low max-price
+                        cumminPrice = price;
+                        
+                        // Open a short position
+                        //Short_price = price;
+                        if(ex_short > p_win && direction_big == -1){
+                            ExecuteMarketOrder(TradeType.Sell, SymbolName, Symbol.NormalizeVolumeInUnits(1));
+                            shadow_short = 0;
+                            //Print("DOWNWARD");  // Do not save this event - it is only the init
+                        }
+                        else{
+                            shadow_short_sell = Symbol.Bid;
+                            shadow_short = 1; // we are uncertain about the psotion
+                        }
+                    }
+                }
+            }
+            else if(direction == 1){  // If we are in upward trend
+                if(cummaxPrice < price){
+                    cummaxPrice = price; // The OSV is the max price for upward
+                }
+                else{
+                    maxdiff = (price - cummaxPrice)/cummaxPrice;
+                    if(maxdiff <= -1*Threshold_down){  // We reverse the trend
+                        direction = -1;
+                        cummaxPrice = 0;  // set new low max-price
+                        cumminPrice = price;
+                        // Open a short position
+                        //Short_price = price;
+                        if(ex_short > p_win && direction_big == -1){
+                            ExecuteMarketOrder(TradeType.Sell, SymbolName, Symbol.NormalizeVolumeInUnits(1));
+                            shadow_short = 0;
+                            //Print("DOWNWARD");
+                        }
+                        else{
+                            shadow_short_sell = Symbol.Bid;
+                            shadow_short = 1; // we are uncertain about the psotion
+                        }
+                        
+                        
+                        if(shadow_long == 0){
+                        // close the long position:
+                            foreach (var position in Positions){
+                                if (position.TradeType == TradeType.Buy){
+                                    ClosePosition(position);
+                                    double earnings = position.GrossProfit;
+                                    //Print("Earnings from Closing: " + earnings);
+                                    //Print("LONG: w = {0}, n = {1}, ex = {2}", w_long, n_long, ex_long);
+                                    if (earnings > 0.0){
+                                        w_long += 1.0;
+                                        qt_long.Enqueue(1.0);
+                                    }
+                                    else{
+                                        qt_long.Enqueue(0.0);
+                                    }  
+                                }
+                            }
+                        }
+                        else{ // we have shadow trade
+                            double earnings = Symbol.Bid - shadow_long_buy;
+                            //Print("SHADOW LONG: w = {0}, n = {1}, ex = {2}", w_long, n_long, ex_long);
+                            win_loss += earnings;
+                            if (earnings > 0.0){
+                                w_long += 1.0;
+                                qt_long.Enqueue(1.0);
+                            }
+                            else{
+                                qt_long.Enqueue(0.0);
+                            }
+                        }
+                    }
+                }
+            }
+            else if(direction == -1){  // If we are in downward trend
+                if(cumminPrice > price){
+                    cumminPrice = price; // The OSV is the max price for upward
+                }
+                else{
+                    mindiff = (price - cumminPrice)/cumminPrice;
+                    //closediff = (Short_price - price)/Short_price;
+                    
+                    if(mindiff >= Threshold_up){  // We reverse the trend
+                        direction = 1;
+                        cumminPrice = 10000000;  // set new low max-price
+                        cummaxPrice = price;
+                        
+                        if(shadow_short == 0){
+                        // Work at stop loss: close the short position:
+                            foreach (var position in Positions){
+                                if (position.TradeType == TradeType.Sell){
+                                    ClosePosition(position);
+                                    double earnings = position.GrossProfit;
+                                    //Print("Earnings from Closing: " + earnings);
+                                    //Print("SHORT: w = {0}, n = {1}, ex = {2}", w_short, n_short, ex_short);
+                                    if (earnings > 0.0){
+                                        w_short += 1.0;
+                                        qt_short.Enqueue(1.0);
+                                    }
+                                    else{
+                                        qt_short.Enqueue(0.0);
+                                    }  
+                                }
+                            }
+                        }
+                        else{ // we have shadow trade
+                            double earnings = Symbol.Ask - shadow_short_sell;
+                            //Print("SHADOW SHORT: w = {0}, n = {1}, ex = {2}", w_short, n_short, ex_short);
+                            win_loss += earnings;
+                            if (earnings > 0.0){
+                                w_short += 1.0;
+                                qt_short.Enqueue(1.0);
+                            }
+                            else{
+                                qt_short.Enqueue(0.0);
+                            }
+                        }
+                        
+                        // Open a long position
+                        if(ex_long > p_win && direction_big == 1){
+                            ExecuteMarketOrder(TradeType.Buy, SymbolName, Symbol.NormalizeVolumeInUnits(1));
+                            shadow_long = 0;
+                            //Print("DOWNWARD");  // Do not save this event - it is only the init
+                        }
+                        else{
+                            shadow_long_buy = Symbol.Ask;
+                            shadow_long = 1; // we are uncertain about the psotion
+                        }
+                        //Print("UPWARD"); 
+                    }
+                }
+            }
+        }
+
+        protected override void OnStop(){
+            foreach (var position in Positions){
+                ClosePosition(position);
+            }
+            
+            Print("Win/Loss of not trading: {0}", win_loss);
+        }
+    }
+}

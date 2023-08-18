@@ -1,0 +1,158 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using cAlgo.API;
+using cAlgo.API.Collections;
+using cAlgo.API.Indicators;
+using cAlgo.API.Internals;
+using System.IO;
+using System.Globalization;
+
+namespace cAlgo.Robots
+{
+    [Robot(AccessRights = AccessRights.None)] //None  FullAccess
+    public class dcc : Robot
+    {
+        //[Parameter(DefaultValue = "Hello world!")]
+        //public string Message { get; set; }
+        
+        StreamWriter _fileWriterUp;
+        StreamWriter _fileWriterDown;
+        
+        [Parameter("Threshold_up", DefaultValue = 0.0004)]
+        public double Threshold_up { get; set; }
+        
+        //[Parameter("Threshold_down", DefaultValue = 0.0004)]
+        public double Threshold_down;
+        
+        
+        private int direction = 0;
+        
+        public double check_sum = 10000.0;  // this is added to the end of the 
+                                            // document to make sure it has been completed
+        
+        public double price;  // current price
+        public double old_price;  // the price at the start of an event
+        public double event_price;  // the price when we have an event
+        public double diff;  // the current difference
+        
+        public double cummaxPrice = 0;
+        public double maxdiff;
+        public double OSV = 0;
+        
+        public double cumminPrice = 10000000;
+        public double mindiff;
+
+
+        protected override void OnStart()
+        {
+
+            Print("I am starting!");
+            Threshold_down = Threshold_up;
+            //System.Diagnostics.Debugger.Launch();
+            
+            var desktopFolder = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            var filePathUp = Path.Combine(desktopFolder, $"Threshold_up_{Threshold_up}.txt");
+            var filePathDown = Path.Combine(desktopFolder, $"Threshold_down_{Threshold_down}.txt");
+            
+            _fileWriterUp = File.AppendText(filePathUp);
+            _fileWriterUp.AutoFlush = true;
+            
+            _fileWriterDown = File.AppendText(filePathDown);
+            _fileWriterDown.AutoFlush = true;
+            old_price = (Symbol.Ask + Symbol.Bid) / 2;
+        }
+
+        protected override void OnTick(){
+            
+            price = (Symbol.Ask + Symbol.Bid) / 2;
+            
+            // The algo is initialized with the trend going up
+            if (direction == 0){ // Initialize the algo  
+                if(cummaxPrice < price){
+                    cummaxPrice = price; // The OSV is the max price for upward
+                }
+                else{
+                    maxdiff = (price - cummaxPrice)/cummaxPrice;
+                    if(maxdiff <= -1*Threshold_down){  // We reverse the trend
+                        direction = -1;
+                        cummaxPrice = 0;  // Set new low max-price
+                        cumminPrice = price;
+                        event_price = price;  // set new event_price - for down
+                        //Print("DOWNWARD, {0}", -1*Threshold_down);  // Do not save this event - it is only the init
+                    }
+                }
+            }
+            else if(direction == 1){  // If we are in upward trend
+                if(cummaxPrice < price){
+                    cummaxPrice = price; // The OSV is the max price for upward
+                }
+                else{
+                    maxdiff = (price - cummaxPrice)/cummaxPrice;
+                    if(maxdiff <= -1*Threshold_down){  // We reverse the trend
+                        direction = -1;
+                        OSV = (cummaxPrice - event_price)/event_price;
+                        cummaxPrice = 0;  // set new low max-price
+                        cumminPrice = price;
+                        event_price = price;  // set new event_price - for down
+                        string osv = OSV.ToString(CultureInfo.InvariantCulture);
+                        string thrs = Threshold_up.ToString(CultureInfo.InvariantCulture);
+                        _fileWriterUp.WriteLine("{0}, {1}", thrs, osv);
+                        //Print("DOWNWARD, {0}", -1*Threshold_down);
+                    }
+                }
+            }
+            else if(direction == -1){  // If we are in downward trend
+                if(cumminPrice > price){
+                    cumminPrice = price; // The OSV is the max price for upward
+                }
+                else{
+                    mindiff = (price - cumminPrice)/cumminPrice;
+                    if(mindiff >= Threshold_up){  // We reverse the trend
+                        direction = 1;
+                        OSV = (event_price - cumminPrice)/event_price;
+                        cumminPrice = 10000000;  // set new low max-price
+                        cummaxPrice = price;
+                        event_price = price;  // set new event_price - for down
+                        string osv = OSV.ToString(CultureInfo.InvariantCulture);
+                        string thrs = Threshold_down.ToString(CultureInfo.InvariantCulture);
+                        _fileWriterDown.WriteLine("{0}, {1}", thrs, osv);
+                        //Print("UPWARD"); 
+                    }
+                }
+            }
+            else{
+                //Print("PROBLEM");
+            }
+        }
+
+        protected override void OnStop()
+        {
+            // Handle cBot stop here
+            string check_sum2 = check_sum.ToString(CultureInfo.InvariantCulture);
+            _fileWriterDown.WriteLine("{0}, {1}", check_sum2, check_sum2);
+            _fileWriterUp.WriteLine("{0}, {1}", check_sum2, check_sum2);
+            _fileWriterUp.Close();
+            _fileWriterDown.Close();
+        }
+    }
+}
+/*
+                if(price < old_price){  // If enter downward
+                    if(diff >= Threshold_down){  // Confirmation of downward
+                        event_price = price;
+                        direction = -1;
+                        cumminPrice = price;
+                        Print("DOWNWARD");
+                    }
+                }
+                else if(price > old_price){  // If enter upward
+                    if(diff >= Threshold_up){  // Confirmation of upward
+                        event_price = price;
+                        direction = 1;
+                        cummaxPrice = price;
+                        Print("UPWARD");
+                    }
+                }
+*/
